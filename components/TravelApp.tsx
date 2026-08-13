@@ -46,9 +46,10 @@ export default function TravelApp() {
 
       if (!session) {
         const { data, error } = await supabase.auth.signInAnonymously();
-        if (error) {
-          setStatus("Supabase isn't configured yet.");
-          return;
+     if (error) {
+  setStatus(`Supabase error: ${error.message}`);
+  return;
+}
         }
         session = data.session;
       }
