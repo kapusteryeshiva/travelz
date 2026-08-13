@@ -18,6 +18,7 @@ export default function TravelApp() {
   const [status, setStatus] = useState("Connecting…");
 
   const activeUser = people.find((p) => p.id === (selectedUser ?? userId));
+
   const activeVisits = useMemo(
     () =>
       new Set(
@@ -32,7 +33,7 @@ export default function TravelApp() {
     return people
       .map((person) => ({
         ...person,
-        count: visits.filter((v) => v.user_id === person.id).length
+        count: visits.filter((v) => v.user_id === person.id).length,
       }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [people, visits]);
@@ -41,34 +42,69 @@ export default function TravelApp() {
     let mounted = true;
 
     async function load() {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        setStatus(`Supabase error: ${sessionError.message}`);
+        return;
+      }
+
       let session = sessionData.session;
 
       if (!session) {
         const { data, error } = await supabase.auth.signInAnonymously();
-     if (error) {
-  setStatus(`Supabase error: ${error.message}`);
-  return;
-}
+
+        if (error) {
+          setStatus(`Supabase error: ${error.message}`);
+          return;
         }
+
         session = data.session;
       }
 
-      if (!mounted || !session) return;
+      if (!mounted || !session) {
+        return;
+      }
+
       setUserId(session.user.id);
 
-      const [{ data: peopleData }, { data: visitsData }] = await Promise.all([
-        supabase.from("people").select("id,name").order("created_at"),
-        supabase.from("visited_countries").select("user_id,country_code")
-      ]);
+      const [{ data: peopleData, error: peopleError }, { data: visitsData, error: visitsError }] =
+        await Promise.all([
+          supabase
+            .from("people")
+            .select("id,name")
+            .order("created_at"),
+          supabase
+            .from("visited_countries")
+            .select("user_id,country_code"),
+        ]);
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
+
+      if (peopleError) {
+        setStatus(`People error: ${peopleError.message}`);
+        return;
+      }
+
+      if (visitsError) {
+        setStatus(`Visits error: ${visitsError.message}`);
+        return;
+      }
 
       setPeople(peopleData ?? []);
       setVisits(visitsData ?? []);
 
-      const mine = (peopleData ?? []).find((p) => p.id === session.user.id);
-      if (mine) setSelectedUser(mine.id);
+      const mine = (peopleData ?? []).find(
+        (p) => p.id === session.user.id
+      );
+
+      if (mine) {
+        setSelectedUser(mine.id);
+      }
+
       setStatus("Live");
     }
 
@@ -80,18 +116,39 @@ export default function TravelApp() {
         "postgres_changes",
         { event: "*", schema: "public", table: "people" },
         async () => {
-          const { data } = await supabase.from("people").select("id,name").order("created_at");
-          if (mounted) setPeople(data ?? []);
+          const { data, error } = await supabase
+            .from("people")
+            .select("id,name")
+            .order("created_at");
+
+          if (mounted) {
+            if (error) {
+              setStatus(`People error: ${error.message}`);
+            } else {
+              setPeople(data ?? []);
+            }
+          }
         }
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "visited_countries" },
+        {
+          event: "*",
+          schema: "public",
+          table: "visited_countries",
+        },
         async () => {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from("visited_countries")
             .select("user_id,country_code");
-          if (mounted) setVisits(data ?? []);
+
+          if (mounted) {
+            if (error) {
+              setStatus(`Visits error: ${error.message}`);
+            } else {
+              setVisits(data ?? []);
+            }
+          }
         }
       )
       .subscribe();
@@ -103,9 +160,12 @@ export default function TravelApp() {
   }, []);
 
   async function createPerson() {
-    if (!userId || !name.trim()) return;
+    if (!userId || !name.trim()) {
+      return;
+    }
 
     setSavingName(true);
+
     const cleanName = name.trim().slice(0, 30);
 
     const { error } = await supabase.from("people").upsert(
@@ -113,16 +173,25 @@ export default function TravelApp() {
       { onConflict: "id" }
     );
 
-    if (!error) {
+    if (error) {
+      setStatus(`People error: ${error.message}`);
+    } else {
       setPeople((current) => {
         const withoutMe = current.filter((p) => p.id !== userId);
-        return [...withoutMe, { id: userId, name: cleanName }];
+
+        return [
+          ...withoutMe,
+          {
+            id: userId,
+            name: cleanName,
+          },
+        ];
       });
+
       setSelectedUser(userId);
       setShowAdd(false);
       setName("");
-    } else {
-      setStatus(error.message);
+      setStatus("Live");
     }
 
     setSavingName(false);
@@ -139,27 +208,42 @@ export default function TravelApp() {
     if (isVisited) {
       setVisits((current) =>
         current.filter(
-          (v) => !(v.user_id === userId && v.country_code === countryCode)
+          (v) =>
+            !(
+              v.user_id === userId &&
+              v.country_code === countryCode
+            )
         )
       );
+
       const { error } = await supabase
         .from("visited_countries")
         .delete()
         .eq("user_id", userId)
         .eq("country_code", countryCode);
 
-      if (error) setStatus(error.message);
+      if (error) {
+        setStatus(`Visits error: ${error.message}`);
+      }
     } else {
       setVisits((current) => [
         ...current,
-        { user_id: userId, country_code: countryCode }
+        {
+          user_id: userId,
+          country_code: countryCode,
+        },
       ]);
-      const { error } = await supabase.from("visited_countries").insert({
-        user_id: userId,
-        country_code: countryCode
-      });
 
-      if (error) setStatus(error.message);
+      const { error } = await supabase
+        .from("visited_countries")
+        .insert({
+          user_id: userId,
+          country_code: countryCode,
+        });
+
+      if (error) {
+        setStatus(`Visits error: ${error.message}`);
+      }
     }
   }
 
@@ -168,15 +252,21 @@ export default function TravelApp() {
       <header className="topbar">
         <div className="brand">
           <div className="logo">🌍</div>
+
           <div>
             <div className="eyebrow">The friend group map</div>
             <h1>Where We&apos;ve Been</h1>
-            <p className="sub">{status} · {people.length} travelers</p>
+            <p className="sub">
+              {status} · {people.length} travelers
+            </p>
           </div>
         </div>
 
         {!activeUser && (
-          <button className="addButton" onClick={() => setShowAdd(true)}>
+          <button
+            className="addButton"
+            onClick={() => setShowAdd(true)}
+          >
             + Add yourself
           </button>
         )}
@@ -187,16 +277,22 @@ export default function TravelApp() {
           <div className="mapHeader">
             <div>
               <div className="mapTitle">
-                {activeUser ? `${activeUser.name}'s world` : "The world"}
+                {activeUser
+                  ? `${activeUser.name}'s world`
+                  : "The world"}
               </div>
+
               <div className="mapHint">
                 {activeUser
                   ? "Click a country to toggle visited."
                   : "Add yourself to start marking countries."}
               </div>
             </div>
+
             {activeUser && (
-              <div className="eyebrow">{activeVisits.size} countries</div>
+              <div className="eyebrow">
+                {activeVisits.size} countries
+              </div>
             )}
           </div>
 
@@ -227,15 +323,26 @@ export default function TravelApp() {
                     border: 0,
                     color: "inherit",
                     textAlign: "left",
-                    marginBottom: 8
+                    marginBottom: 8,
                   }}
                   onClick={() => setSelectedUser(person.id)}
                 >
-                  <div className="avatar">{person.name.slice(0, 1).toUpperCase()}</div>
+                  <div className="avatar">
+                    {person.name.slice(0, 1).toUpperCase()}
+                  </div>
+
                   <div>
-                    <div className="profileName">{person.name}</div>
+                    <div className="profileName">
+                      {person.name}
+                    </div>
+
                     <div className="profileCount">
-                      {visits.filter((v) => v.user_id === person.id).length} countries
+                      {
+                        visits.filter(
+                          (v) => v.user_id === person.id
+                        ).length
+                      }{" "}
+                      countries
                     </div>
                   </div>
                 </button>
@@ -247,7 +354,9 @@ export default function TravelApp() {
             <div className="cardTitle">Leaderboard</div>
 
             {leaderboard.length === 0 ? (
-              <div className="empty">Your leaderboard will appear here.</div>
+              <div className="empty">
+                Your leaderboard will appear here.
+              </div>
             ) : (
               leaderboard.map((person, index) => (
                 <button
@@ -260,15 +369,27 @@ export default function TravelApp() {
                     borderRight: 0,
                     background: "transparent",
                     color: "inherit",
-                    textAlign: "left"
+                    textAlign: "left",
                   }}
                   onClick={() => setSelectedUser(person.id)}
                 >
                   <div className="rankNum">
-                    {index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `#${index + 1}`}
+                    {index === 0
+                      ? "🥇"
+                      : index === 1
+                        ? "🥈"
+                        : index === 2
+                          ? "🥉"
+                          : `#${index + 1}`}
                   </div>
-                  <div className="rankName">{person.name}</div>
-                  <div className="rankCount">{person.count}</div>
+
+                  <div className="rankName">
+                    {person.name}
+                  </div>
+
+                  <div className="rankCount">
+                    {person.count}
+                  </div>
                 </button>
               ))
             )}
@@ -277,13 +398,21 @@ export default function TravelApp() {
       </section>
 
       {showAdd && (
-        <div className="modalBack" onMouseDown={() => setShowAdd(false)}>
-          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div
+          className="modalBack"
+          onMouseDown={() => setShowAdd(false)}
+        >
+          <div
+            className="modal"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <h2>Join the map</h2>
+
             <p>
-              Pick a name for your friend group. Your account is anonymous;
-              this name is what everyone else will see.
+              Pick a name for your friend group. Your account is
+              anonymous; this name is what everyone else will see.
             </p>
+
             <input
               autoFocus
               className="input"
@@ -292,14 +421,25 @@ export default function TravelApp() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") createPerson();
+                if (e.key === "Enter") {
+                  createPerson();
+                }
               }}
             />
+
             <div className="modalActions">
-              <button className="cancel" onClick={() => setShowAdd(false)}>
+              <button
+                className="cancel"
+                onClick={() => setShowAdd(false)}
+              >
                 Cancel
               </button>
-              <button className="saveButton" disabled={savingName} onClick={createPerson}>
+
+              <button
+                className="saveButton"
+                disabled={savingName}
+                onClick={createPerson}
+              >
                 {savingName ? "Joining…" : "Join"}
               </button>
             </div>
