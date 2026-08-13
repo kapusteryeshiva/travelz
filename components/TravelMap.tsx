@@ -1,6 +1,5 @@
 "use client";
 
-import { SVGMap } from "react-svg-map";
 import World from "@svg-maps/world";
 
 type Props = {
@@ -9,23 +8,48 @@ type Props = {
   onCountryClick: (countryCode: string) => void;
 };
 
-export default function TravelMap({ visited, selected, onCountryClick }: Props) {
+export default function TravelMap({
+  visited,
+  selected,
+  onCountryClick,
+}: Props) {
   return (
-    <SVGMap
-      map={World}
-      onLocationClick={(event: React.MouseEvent<SVGElement>) => {
-        const target = event.currentTarget as SVGElement;
-        const id = target.getAttribute("id");
-        if (id) onCountryClick(id.toUpperCase());
-      }}
-      locationClassName={(location) => {
+    <svg
+      viewBox={World.viewBox}
+      xmlns="http://www.w3.org/2000/svg"
+      className="travel-map"
+      role="img"
+      aria-label="World map"
+    >
+      {World.locations.map((location) => {
         const id = location.id.toUpperCase();
-        return [
-          "svg-map__location",
-          visited.has(id) ? "visited" : "",
-          selected === id ? "current" : ""
-        ].filter(Boolean).join(" ");
-      }}
-    />
+        const isVisited = visited.has(id);
+        const isSelected = selected === id;
+
+        return (
+          <path
+            key={location.id}
+            d={location.path}
+            className={[
+              "svg-map__location",
+              isVisited ? "visited" : "",
+              isSelected ? "current" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => onCountryClick(id)}
+            role="button"
+            tabIndex={0}
+            aria-label={location.name}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onCountryClick(id);
+              }
+            }}
+          />
+        );
+      })}
+    </svg>
   );
 }
